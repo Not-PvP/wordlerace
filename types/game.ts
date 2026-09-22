@@ -58,6 +58,13 @@ export interface GuessResponse {
   currentWordIndex: number;
   playerStatus: PlayerStatus;
   message?: string;
+  /** The target word, included whenever it just stopped being secret (word failed). */
+  revealedWord?: string;
+}
+
+export interface EliminateResponse {
+  status: PlayerStatus;
+  revealedWord?: string;
 }
 
 export interface ApiError {

@@ -8,7 +8,7 @@ import { PlayerList } from "./PlayerList";
 import { useCountdown } from "@/hooks/useCountdown";
 import { deriveKeyboardStatus, type LetterResult } from "@/lib/game/wordMatch";
 import { postJson, ClientApiError } from "@/lib/client/api";
-import type { GuessResponse, PlayerRow, RoomSettings } from "@/types/game";
+import type { EliminateResponse, GuessResponse, PlayerRow, RoomSettings } from "@/types/game";
 
 interface GameScreenProps {
   roomId: string;
@@ -33,14 +33,19 @@ export function GameScreen({
   const [message, setMessage] = useState<string | null>(null);
   const [bonusFlash, setBonusFlash] = useState<number | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [revealedWord, setRevealedWord] = useState<string | null>(null);
 
   const lastWordIndexRef = useRef(selfPlayer.current_word_index);
-  const eliminationSentRef = useRef(false);
+  const advanceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isActive = selfPlayer.status === "active";
 
   const remainingMs = useCountdown(isActive ? selfPlayer.race_end_time : null);
 
-  // A new word started (either our own advance or a reconnect) — clear the board.
+  // A new word started for a reason other than our own guess response below
+  // (e.g. a page refresh landing mid-race) — clear the board. Our own
+  // correct/exhausted handling pre-marks lastWordIndexRef so this doesn't
+  // also fire (and cut the solved-row animation short) once realtime
+  // catches up to a transition we already started locally.
   useEffect(() => {
     if (selfPlayer.current_word_index !== lastWordIndexRef.current) {
       lastWordIndexRef.current = selfPlayer.current_word_index;
@@ -51,13 +56,40 @@ export function GameScreen({
   }, [selfPlayer.current_word_index]);
 
   useEffect(() => {
-    if (isActive && remainingMs <= 0 && !eliminationSentRef.current) {
-      eliminationSentRef.current = true;
-      postJson(`/api/room/${roomId}/eliminate`, { token }).catch(() => {
-        eliminationSentRef.current = false;
-      });
-    }
-  }, [isActive, remainingMs, roomId, token]);
+    return () => {
+      if (advanceTimerRef.current) clearTimeout(advanceTimerRef.current);
+    };
+  }, []);
+
+  // Ask the server to eliminate us once our local clock says time's up, and
+  // keep retrying (network blips, a hair of clock drift vs. the server)
+  // until it actually confirms — otherwise a single failed attempt could
+  // strand the player "active" forever, since remainingMs floors at exactly
+  // 0 and stops changing, so an effect keyed on it alone would never fire
+  // again to retry.
+  const timeExpired = isActive && remainingMs <= 0;
+  useEffect(() => {
+    if (!timeExpired) return;
+
+    let stopped = false;
+    const attempt = () => {
+      postJson<EliminateResponse>(`/api/room/${roomId}/eliminate`, { token })
+        .then((res) => {
+          if (!stopped && res.revealedWord) setRevealedWord(res.revealedWord);
+        })
+        .catch(() => {
+          // realtime will confirm success once it lands; on failure just
+          // let the interval below try again.
+        });
+    };
+
+    attempt();
+    const interval = setInterval(attempt, 1500);
+    return () => {
+      stopped = true;
+      clearInterval(interval);
+    };
+  }, [timeExpired, roomId, token]);
 
   const submitGuess = useCallback(async () => {
     if (submitting || !isActive) return;
@@ -84,15 +116,34 @@ export function GameScreen({
 
       if (res.correct) {
         setBonusFlash(settings.correctWordBonus);
-        setTimeout(() => setBonusFlash(null), 1200);
       } else if (res.message) {
-        setMessage(res.message);
+        setMessage(res.revealedWord ? `${res.message} It was ${res.revealedWord.toUpperCase()}.` : res.message);
+      }
+
+      // The word is advancing (solved, or out of guesses). Hold the
+      // finished grid on screen for a beat — long enough to see the flip
+      // animation and bonus flash — before clearing it for the next word,
+      // instead of clearing the instant realtime confirms the DB write
+      // (which can now arrive in well under 100ms).
+      if (res.correct || res.message) {
+        lastWordIndexRef.current = res.currentWordIndex;
+        if (advanceTimerRef.current) clearTimeout(advanceTimerRef.current);
+        advanceTimerRef.current = setTimeout(
+          () => {
+            setGuesses([]);
+            setBonusFlash(null);
+            setMessage(null);
+          },
+          res.correct ? 900 : 1100
+        );
       }
     } catch (err) {
       setShake(true);
       setTimeout(() => setShake(false), 400);
       if (err instanceof ClientApiError) {
         setMessage(err.message);
+        const word = err.data.revealedWord;
+        if (typeof word === "string") setRevealedWord(word);
       }
     } finally {
       setSubmitting(false);
@@ -143,7 +194,9 @@ export function GameScreen({
           <p className="text-sm font-medium text-muted" role="status">
             {selfPlayer.status === "finished"
               ? "You solved every word! Waiting for the race to end…"
-              : "You're out — watching the race finish…"}
+              : revealedWord
+                ? `Time's up! The word was ${revealedWord.toUpperCase()}. Watching the race finish…`
+                : "You're out — watching the race finish…"}
           </p>
         ) : (
           <p className="text-sm font-medium text-muted">

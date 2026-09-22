@@ -184,11 +184,12 @@ async function main() {
   console.log(`    Bob has ~${Math.round(bobRemainingMs / 1000)}s left, waiting it out...`);
   await sleep(Math.max(0, bobRemainingMs) + 500);
 
-  const eliminate = await post<{ status: string; __status: number }>(
+  const eliminate = await post<{ status: string; revealedWord?: string; __status: number }>(
     `/api/room/${create.roomId}/eliminate`,
     { token: join.token }
   );
   assert(eliminate.__status === 200 && eliminate.status === "eliminated", "Bob eliminated once his timer expired");
+  assert(eliminate.revealedWord === bobWord0, "eliminate reveals the word Bob was stuck on");
 
   console.log("--- security: eliminating before time is up is rejected ---");
   const earlyEliminate = await post<{ __status: number }>(
@@ -209,6 +210,36 @@ async function main() {
   assert(bob.status === "eliminated" && bob.words_solved === 0, "Bob final state correct");
 
   assert(realtimeEvents > 0, `realtime delivered ${realtimeEvents} player row change event(s)`);
+
+  console.log("--- rematch: host resets a finished room back to the lobby ---");
+  const rematchByBob = await post<{ __status: number }>(`/api/room/${create.roomId}/reset`, {
+    token: join.token,
+  });
+  assert(rematchByBob.__status === 403, "non-host cannot trigger a rematch");
+
+  const rematch = await post<{ __status: number }>(`/api/room/${create.roomId}/reset`, {
+    token: create.token,
+  });
+  assert(rematch.__status === 200, "host resets the room for a rematch");
+
+  const roomAfterReset = await fetchRoom(create.roomId);
+  assert(roomAfterReset.status === "waiting", "room is back in the lobby after rematch");
+  assert(!roomAfterReset.ended_at, "ended_at cleared after rematch");
+
+  const playersAfterReset = await fetchPlayers(create.roomId);
+  const aliceAfterReset = playersAfterReset.find((p) => p.display_name === "Alice")!;
+  const bobAfterReset = playersAfterReset.find((p) => p.display_name === "Bob")!;
+  assert(
+    aliceAfterReset.status === "active" && aliceAfterReset.words_solved === 0 && aliceAfterReset.is_ready,
+    "host is reset to active/ready with fresh progress"
+  );
+  assert(
+    bobAfterReset.status === "active" && bobAfterReset.words_solved === 0 && !bobAfterReset.is_ready,
+    "non-host is reset to active/not-ready with fresh progress"
+  );
+
+  const newWord0 = await targetWordFor(create.roomId, 0);
+  assert(!!newWord0, "a fresh word sequence was generated for the rematch");
 
   anon.removeChannel(channel);
   console.log("\nALL CHECKS PASSED");

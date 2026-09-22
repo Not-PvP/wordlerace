@@ -5,7 +5,7 @@
 export const GAME_CONFIG = {
   wordLength: 5,
   maxGuesses: 6,
-  startingTime: 60, // seconds each player starts the race with
+  startingTime: 90, // seconds each player starts the race with
   correctWordBonus: 15, // seconds added when a player solves a word
   wordsPerRace: 20, // race ends for a player once they solve this many words
   countdownSeconds: 3,

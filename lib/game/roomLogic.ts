@@ -1,10 +1,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { GAME_CONFIG } from "./config";
-import { generateRoomCode } from "./roomCode";
 import type { RoomSettings } from "@/types/game";
 import { ApiError } from "./apiError";
 
-const MAX_CODE_ATTEMPTS = 10;
 const DISPLAY_NAME_MAX_LENGTH = 20;
 
 export function buildSettings(overrides?: Partial<RoomSettings>): RoomSettings {
@@ -47,16 +45,6 @@ export function sanitizeDisplayName(raw: unknown): string {
     throw new ApiError(400, "Display name is required");
   }
   return trimmed;
-}
-
-/** Generates a room code that isn't already in use. */
-export async function generateUniqueRoomCode(db: SupabaseClient): Promise<string> {
-  for (let attempt = 0; attempt < MAX_CODE_ATTEMPTS; attempt++) {
-    const code = generateRoomCode(GAME_CONFIG.roomCodeLength);
-    const { data } = await db.from("rooms").select("id").eq("code", code).maybeSingle();
-    if (!data) return code;
-  }
-  throw new ApiError(500, "Could not allocate a room code, please try again");
 }
 
 /**

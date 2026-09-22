@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { after } from "next/server";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { createServiceClient } from "@/lib/supabase/server";
 import { authenticatePlayer } from "@/lib/game/auth";
 import { ApiError, errorResponse } from "@/lib/game/apiError";
@@ -8,6 +9,20 @@ import { GAME_CONFIG } from "@/lib/game/config";
 import { matchGuess, isSolved } from "@/lib/game/wordMatch";
 import { isValidGuess } from "@/lib/words";
 import type { GuessResponse, RoomSettings } from "@/types/game";
+
+async function revealWord(
+  db: SupabaseClient,
+  roomId: string,
+  wordIndex: number
+): Promise<string | undefined> {
+  const { data } = await db
+    .from("room_words")
+    .select("word")
+    .eq("room_id", roomId)
+    .eq("word_index", wordIndex)
+    .maybeSingle();
+  return data?.word;
+}
 
 export async function POST(
   req: NextRequest,
@@ -75,7 +90,11 @@ export async function POST(
     if (raceEndTime === null || now > raceEndTime + GAME_CONFIG.eliminationGraceMs) {
       await db.from("players").update({ status: "eliminated" }).eq("id", player.id);
       after(() => maybeFinishRoom(db, roomId));
-      throw new ApiError(410, "Your time ran out");
+      const revealedWord = await revealWord(db, roomId, player.current_word_index);
+      return NextResponse.json(
+        { error: "Your time ran out", revealedWord },
+        { status: 410 }
+      );
     }
 
     if (wordIndex !== player.current_word_index) {
@@ -154,6 +173,7 @@ export async function POST(
       currentWordIndex: newWordIndex,
       playerStatus: newStatus,
       message: exhausted ? "Out of guesses — next word!" : undefined,
+      revealedWord: exhausted ? target : undefined,
     };
 
     return NextResponse.json(response);

@@ -15,16 +15,18 @@ export async function POST(req: NextRequest) {
 
     const db = createServiceClient();
 
-    const { data: room } = await db.from("rooms").select("*").eq("code", code).maybeSingle();
+    // One round trip for both the room and its current players, via
+    // PostgREST's foreign-table embedding, instead of two sequential ones.
+    const { data: room, error: roomError } = await db
+      .from("rooms")
+      .select("*, players(id, display_name)")
+      .eq("code", code)
+      .maybeSingle();
+    if (roomError) throw roomError;
     if (!room) throw new ApiError(404, "Room not found");
     if (room.status !== "waiting") throw new ApiError(409, "This race has already started");
 
-    const { data: players, error: playersError } = await db
-      .from("players")
-      .select("id, display_name")
-      .eq("room_id", room.id);
-    if (playersError) throw playersError;
-
+    const players = room.players as { id: string; display_name: string }[];
     const settings = room.settings as RoomSettings;
     if (players.length >= settings.maxPlayers) {
       throw new ApiError(409, "This room is full");
@@ -33,23 +35,30 @@ export async function POST(req: NextRequest) {
       throw new ApiError(409, "That name is already taken in this room");
     }
 
-    const { data: player, error: playerError } = await db
-      .from("players")
-      .insert({ room_id: room.id, display_name: displayName, is_host: false, is_ready: false })
-      .select()
-      .single();
-    if (playerError || !player) throw playerError ?? new Error("Failed to join room");
-
+    const playerId = randomUUID();
     const token = randomUUID();
+
+    // player_tokens.player_id has a foreign key on players.id, so this pair
+    // has to stay sequential — the token insert would otherwise race the
+    // player insert and fail with a foreign-key violation.
+    const { error: playerError } = await db.from("players").insert({
+      id: playerId,
+      room_id: room.id,
+      display_name: displayName,
+      is_host: false,
+      is_ready: false,
+    });
+    if (playerError) throw playerError;
+
     const { error: tokenError } = await db
       .from("player_tokens")
-      .insert({ player_id: player.id, token });
+      .insert({ player_id: playerId, token });
     if (tokenError) throw tokenError;
 
     return NextResponse.json({
       roomId: room.id,
       roomCode: room.code,
-      playerId: player.id,
+      playerId,
       token,
     });
   } catch (err) {
