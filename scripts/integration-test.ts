@@ -178,6 +178,16 @@ async function main() {
   );
   assert(bobGuess.__status === 200 && bobGuess.correct === false, "Bob's wrong guess accepted, not correct");
 
+  console.log("--- reconnect: restore Bob's in-progress guesses for his current word ---");
+  const progress = await post<{ guesses: unknown[]; __status: number }>(
+    `/api/room/${create.roomId}/my-progress`,
+    { token: join.token }
+  );
+  assert(
+    progress.__status === 200 && Array.isArray(progress.guesses) && progress.guesses.length === 1,
+    "my-progress reconstructs Bob's one guess so far on this word"
+  );
+
   const bobBefore = await fetchPlayers(create.roomId);
   const bobRow = bobBefore.find((p) => p.display_name === "Bob")!;
   const bobRemainingMs = new Date(bobRow.race_end_time).getTime() - Date.now();

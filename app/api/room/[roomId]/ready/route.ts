@@ -11,9 +11,16 @@ export async function POST(
     const { roomId } = await params;
     const body = await req.json().catch(() => ({}));
     const db = createServiceClient();
-    const player = await authenticatePlayer(db, body.token, roomId);
 
-    const { data: room } = await db.from("rooms").select("status").eq("id", roomId).maybeSingle();
+    const [player, room] = await Promise.all([
+      authenticatePlayer(db, body.token, roomId),
+      db
+        .from("rooms")
+        .select("status")
+        .eq("id", roomId)
+        .maybeSingle()
+        .then(({ data }) => data),
+    ]);
     if (!room) throw new ApiError(404, "Room not found");
     if (room.status !== "waiting") throw new ApiError(409, "This race has already started");
 

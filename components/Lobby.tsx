@@ -12,9 +12,18 @@ interface LobbyProps {
   settings: RoomSettings;
   selfPlayer: PlayerRow;
   players: PlayerRow[];
+  onStarted: (gameStartAt: string) => void;
 }
 
-export function Lobby({ roomId, roomCode, token, settings, selfPlayer, players }: LobbyProps) {
+export function Lobby({
+  roomId,
+  roomCode,
+  token,
+  settings,
+  selfPlayer,
+  players,
+  onStarted,
+}: LobbyProps) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -37,7 +46,12 @@ export function Lobby({ roomId, roomCode, token, settings, selfPlayer, players }
     setBusy(true);
     setError(null);
     try {
-      await postJson(`/api/room/${roomId}/start`, { token });
+      // Use our own response immediately instead of waiting for Realtime to
+      // tell us what we just did — that round trip (through the DB and back
+      // to ourselves) could otherwise eat a second or more of the 3-2-1
+      // countdown before it even starts rendering.
+      const res = await postJson<{ gameStartAt: string }>(`/api/room/${roomId}/start`, { token });
+      onStarted(res.gameStartAt);
     } catch (err) {
       setError(err instanceof ClientApiError ? err.message : "Could not start race");
       setBusy(false);

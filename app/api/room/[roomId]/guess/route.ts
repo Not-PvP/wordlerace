@@ -136,34 +136,39 @@ export async function POST(
       newStatus = "finished";
     }
 
-    // The only write the response actually depends on. Guess history and
-    // the room-finished check don't affect what we tell this player, so
-    // they run after the response is sent instead of adding to its latency.
-    const { error: updateError } = await db
-      .from("players")
-      .update({
-        total_guesses: player.total_guesses + 1,
-        guesses_this_word: newGuessesThisWord,
-        race_end_time: new Date(newRaceEndTime).toISOString(),
-        words_solved: newWordsSolved,
-        current_word_index: newWordIndex,
-        status: newStatus,
-      })
-      .eq("id", player.id);
-    if (updateError) throw updateError;
-
-    after(async () => {
-      await db.from("guesses").insert({
+    // Both writes are awaited: the players update because the response
+    // depends on it, and the guesses insert because /my-progress (used to
+    // restore the grid after a mid-word refresh) reads it back — deferring
+    // it via after() would let a refresh race ahead of its own guess being
+    // saved. They don't depend on each other, so they still run together
+    // rather than one after the other. Only the room-finished check, which
+    // doesn't affect this response, is deferred.
+    const [playerUpdate, guessInsert] = await Promise.all([
+      db
+        .from("players")
+        .update({
+          total_guesses: player.total_guesses + 1,
+          guesses_this_word: newGuessesThisWord,
+          race_end_time: new Date(newRaceEndTime).toISOString(),
+          words_solved: newWordsSolved,
+          current_word_index: newWordIndex,
+          status: newStatus,
+        })
+        .eq("id", player.id),
+      db.from("guesses").insert({
         player_id: player.id,
         room_id: roomId,
         word_index: wordIndex,
         guess: rawGuess,
         correct,
-      });
-      if (newStatus === "finished") {
-        await maybeFinishRoom(db, roomId);
-      }
-    });
+      }),
+    ]);
+    if (playerUpdate.error) throw playerUpdate.error;
+    if (guessInsert.error) throw guessInsert.error;
+
+    if (newStatus === "finished") {
+      after(() => maybeFinishRoom(db, roomId));
+    }
 
     const response: GuessResponse = {
       result,

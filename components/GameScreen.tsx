@@ -8,7 +8,13 @@ import { PlayerList } from "./PlayerList";
 import { useCountdown } from "@/hooks/useCountdown";
 import { deriveKeyboardStatus, type LetterResult } from "@/lib/game/wordMatch";
 import { postJson, ClientApiError } from "@/lib/client/api";
-import type { EliminateResponse, GuessResponse, PlayerRow, RoomSettings } from "@/types/game";
+import type {
+  EliminateResponse,
+  GuessResponse,
+  MyProgressResponse,
+  PlayerRow,
+  RoomSettings,
+} from "@/types/game";
 
 interface GameScreenProps {
   roomId: string;
@@ -37,6 +43,7 @@ export function GameScreen({
 
   const lastWordIndexRef = useRef(selfPlayer.current_word_index);
   const advanceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hydratedRef = useRef(false);
   const isActive = selfPlayer.status === "active";
 
   const remainingMs = useCountdown(isActive ? selfPlayer.race_end_time : null);
@@ -60,6 +67,21 @@ export function GameScreen({
       if (advanceTimerRef.current) clearTimeout(advanceTimerRef.current);
     };
   }, []);
+
+  // Landing here mid-word (a page refresh) starts with a blank grid even
+  // though the player may already have guesses in on this word — restore
+  // them from the server once, on mount, so a refresh doesn't cost progress.
+  useEffect(() => {
+    if (hydratedRef.current) return;
+    hydratedRef.current = true;
+    if (selfPlayer.guesses_this_word > 0) {
+      postJson<MyProgressResponse>(`/api/room/${roomId}/my-progress`, { token })
+        .then((res) => setGuesses(res.guesses))
+        .catch(() => {
+          // best-effort — worst case this one word's grid just starts blank
+        });
+    }
+  }, [roomId, token, selfPlayer.guesses_this_word]);
 
   // Ask the server to eliminate us once our local clock says time's up, and
   // keep retrying (network blips, a hair of clock drift vs. the server)
@@ -179,6 +201,7 @@ export function GameScreen({
 
   const letterStatus = deriveKeyboardStatus(guesses);
   const wordNumber = Math.min(selfPlayer.words_solved + 1, settings.wordsPerRace);
+  const stillRacing = players.filter((p) => p.status === "active" && p.id !== selfPlayer.id);
 
   return (
     <div className="mx-auto flex w-full max-w-2xl flex-1 flex-col gap-4 px-4 py-4">
@@ -198,11 +221,19 @@ export function GameScreen({
                 ? `Time's up! The word was ${revealedWord.toUpperCase()}. Watching the race finish…`
                 : "You're out — watching the race finish…"}
           </p>
-        ) : (
+        ) : null}
+
+        {!isActive && stillRacing.length > 0 ? (
+          <p className="text-sm text-muted">
+            Waiting on: {stillRacing.map((p) => p.display_name).join(", ")}
+          </p>
+        ) : null}
+
+        {isActive ? (
           <p className="text-sm font-medium text-muted">
             Word {wordNumber} / {settings.wordsPerRace}
           </p>
-        )}
+        ) : null}
 
         <div aria-live="polite" className="h-5 text-sm font-medium text-red-600">
           {message}

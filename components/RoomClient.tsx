@@ -20,6 +20,12 @@ interface RoomClientProps {
 export function RoomClient({ code }: RoomClientProps) {
   const router = useRouter();
   const [session, setSession] = useState<RoomSession | null | undefined>(undefined);
+  // Set the instant our own "Start Race" click succeeds, so the host doesn't
+  // have to wait for Realtime to echo the room update back to itself before
+  // the countdown starts rendering. Once Realtime does catch up, room's own
+  // game_start_at (identical, since the server computed both) takes over
+  // seamlessly via the `??` below.
+  const [optimisticGameStartAt, setOptimisticGameStartAt] = useState<string | null>(null);
 
   useEffect(() => {
     // localStorage only exists on the client, so this has to run post-mount
@@ -29,9 +35,20 @@ export function RoomClient({ code }: RoomClientProps) {
   }, [code]);
 
   const { room, players, loading, error } = useRoomRealtime(session?.roomId ?? null);
-  const countdownMs = useCountdown(
-    room?.status === "countdown" ? room.game_start_at : null
-  );
+
+  const isStarting = room?.status === "countdown" || (room?.status === "waiting" && optimisticGameStartAt !== null);
+  const effectiveGameStartAt = room?.game_start_at ?? optimisticGameStartAt;
+  const countdownMs = useCountdown(isStarting ? effectiveGameStartAt : null);
+
+  // Clear a stale optimistic start once the room is back in the lobby for a
+  // rematch — otherwise it would keep isStarting stuck true through the
+  // whole next lobby phase.
+  useEffect(() => {
+    if (room?.status === "finished") {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setOptimisticGameStartAt(null);
+    }
+  }, [room?.status]);
 
   if (session === undefined) {
     return <CenteredMessage>Loading…</CenteredMessage>;
@@ -90,7 +107,7 @@ export function RoomClient({ code }: RoomClientProps) {
     );
   }
 
-  if (room.status === "waiting") {
+  if (!isStarting) {
     return (
       <Lobby
         roomId={room.id}
@@ -99,11 +116,12 @@ export function RoomClient({ code }: RoomClientProps) {
         settings={settings}
         selfPlayer={selfPlayer}
         players={players}
+        onStarted={setOptimisticGameStartAt}
       />
     );
   }
 
-  // status === "countdown" covers both the pre-race countdown and live play.
+  // isStarting covers both the pre-race countdown and live play.
   if (countdownMs > 0) {
     return <Countdown secondsLeft={Math.ceil(countdownMs / 1000)} />;
   }

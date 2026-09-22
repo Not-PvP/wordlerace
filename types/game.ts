@@ -67,6 +67,10 @@ export interface EliminateResponse {
   revealedWord?: string;
 }
 
+export interface MyProgressResponse {
+  guesses: LetterResult[][];
+}
+
 export interface ApiError {
   error: string;
 }
